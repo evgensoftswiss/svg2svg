@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="Заменяйте встроенные изображения в SVG прямо в браузере.">
+  <title>SVG Recompile</title><link rel="stylesheet" href="assets/style.css">
+  <style>
+    .hidden{display:none!important}.notice{margin:14px 0;padding:12px 15px;border-radius:12px;background:#ffffff0b;color:var(--muted)}
+    .image-row .muted{overflow-wrap:anywhere}.status{margin:16px 0}.actions button:disabled{opacity:.55;cursor:wait}
+  </style>
+</head>
+<body><main class="page">
+  <header class="hero"><div><p class="eyebrow">Работает в браузере</p><h1>SVG Recompile</h1><p class="hero-text">Замените встроенные изображения в SVG и скачайте обновлённый файл. Обработка происходит локально: файлы не отправляются на сервер.</p></div><button id="reset" class="ghost-link" type="button">Начать заново</button></header>
+  <section class="card upload-card"><h2>1. Загрузить SVG</h2><div class="upload-form"><label class="file-drop"><span class="file-drop-title">Выберите исходный SVG</span><span class="file-drop-hint">Файл обрабатывается только в этом браузере</span><input id="svgFile" type="file" accept=".svg,image/svg+xml"></label><button id="loadSvg" class="button button-primary" type="button">Разобрать SVG</button></div></section>
+  <div id="message" class="alert hidden" role="status"></div><section id="meta" class="card hidden"></section><section id="images" class="card hidden"></section>
+</main>
+<script>
+(() => {
+  const svgInput=document.querySelector('#svgFile'), loadBtn=document.querySelector('#loadSvg'), msg=document.querySelector('#message'), meta=document.querySelector('#meta'), images=document.querySelector('#images');
+  let source='', sourceName='source.svg', matches=[];
+  const escapeHtml=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  function message(text,error=false){msg.textContent=text;msg.className='alert '+(error?'alert-error':'alert-success');}
+  function reset(){source='';matches=[];svgInput.value='';msg.className='alert hidden';meta.className='card hidden';images.className='card hidden';}
+  document.querySelector('#reset').addEventListener('click',reset);
+  loadBtn.addEventListener('click',async()=>{
+    const file=svgInput.files[0]; if(!file){message('Сначала выберите SVG-файл.',true);return;}
+    if(!file.name.toLowerCase().endsWith('.svg')){message('Выберите файл с расширением .svg.',true);return;}
+    try { source=await file.text(); sourceName=file.name; matches=[...source.matchAll(/<(?:(?:[\w.-]+):)?image\b([\s\S]*?)(\/?>)/gi)]; render(); }
+    catch(e){message('Не удалось прочитать файл: '+e.message,true);}
+  });
+  function render(){
+    meta.innerHTML=`<h2>2. Найденные картинки</h2><div class="meta-grid"><div><span class="label">Файл</span><strong>${escapeHtml(sourceName)}</strong></div><div><span class="label">Image-тегов</span><strong>${matches.length}</strong></div><div><span class="label">Обработка</span><strong>Локально в браузере</strong></div></div>`;meta.className='card meta-card';images.className='card';
+    if(!matches.length){images.innerHTML='<h2>Картинки не найдены</h2><p>В SVG не найдено тегов &lt;image&gt;.</p>';return;}
+    images.innerHTML=`<div class="section-heading"><div><h2>3. Выберите замены</h2><p>Замена применяется к картинке с соответствующим номером. Пустые поля оставляют исходное изображение.</p></div><label class="checkbox"><input id="compact" type="checkbox" checked><span>Сжать SVG</span></label></div><div class="image-list">${matches.map((m,i)=>{
+      const attr=m[1], href=attr.match(/(?:xlink:)?href\s*=\s*(["'])(.*?)\1/is)?.[2]||''; const mime=href.match(/^data:([^;,]+)/i)?.[1]||'';
+      let preview=''; if(href.startsWith('data:image/')&&!mime.includes('svg')) preview=`<img src="${escapeHtml(href)}" alt="Картинка ${i+1}">`; else preview='<div class="preview-placeholder"><span>Preview недоступен</span></div>';
+      return `<article class="image-row"><div class="preview-box">${preview}</div><div class="image-info"><div class="row-title"><h3>Картинка ${i+1}</h3>${mime?`<span class="pill">${escapeHtml(mime)}</span>`:''}</div><p class="muted">${href.startsWith('data:')?'Встроенное изображение':href?'Внешняя ссылка — будет сохранена без изменений':'href не найден'}</p><label class="replacement-input"><span>Новая картинка для замены</span><input type="file" data-index="${i}" accept=".png,.jpg,.jpeg,.webp,.gif,.svg,.bmp,.ico,image/*"></label></div></article>`;
+    }).join('')}</div><div class="actions"><button id="compile" class="button button-primary" type="button">Собрать и скачать SVG</button></div>`;
+    document.querySelector('#compile').addEventListener('click',compile);
+  }
+  async function compile(){
+    const btn=document.querySelector('#compile');btn.disabled=true;btn.textContent='Обработка…';
+    try {
+      const replacements=new Map();
+      for(const input of images.querySelectorAll('input[type=file]')) if(input.files[0]) replacements.set(Number(input.dataset.index),await readDataUri(input.files[0]));
+      let idx=0; let result=source.replace(/<(?:(?:[\w.-]+):)?image\b([\s\S]*?)(\/?>)/gi,(whole,attrs,end)=>{
+        const n=idx++;if(!replacements.has(n))return whole;
+        const uri=replacements.get(n);let updated=attrs;const re=/((?:xlink:)?href\s*=\s*)(["']).*?\2/is;
+        if(re.test(updated)) updated=updated.replace(re,(_,prefix,q)=>prefix+q+uri+q); else updated+=' href="'+uri+'"';
+        const tag=whole.match(/^<(?:(?:[\w.-]+):)?image\b/i)?.[0]||'<image';
+        return tag+updated+end;
+      });
+      if(document.querySelector('#compact').checked) result=result.replace(/[\r\n\t]/g,'').replace(/\s{2,}/g,' ').trim();
+      const blob=new Blob([result],{type:'image/svg+xml;charset=utf-8'}), url=URL.createObjectURL(blob), a=document.createElement('a');a.href=url;a.download=sourceName.replace(/\.svg$/i,'')+'_recompiled.svg';document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);message('Готово. Пересобранный SVG скачан.');
+    } catch(e){message('Не удалось собрать SVG: '+e.message,true);} finally {btn.disabled=false;btn.textContent='Собрать и скачать SVG';}
+  }
+  function readDataUri(file){return new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(r.result);r.onerror=()=>reject(new Error('Ошибка чтения файла '+file.name));r.readAsDataURL(file);});}
+})();
+</script></body></html>
